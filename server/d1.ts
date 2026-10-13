@@ -702,9 +702,10 @@ export const d1Db = {
     d1: D1Database,
     userId: string,
     title = 'New Conversation',
-    model = 'qwen/qwen3.8-27b'
+    model = 'qwen/qwen3.8-27b',
+    customId?: string
   ): Promise<Conversation> {
-    const id = generateUuid();
+    const id = customId || generateUuid();
     const now = new Date().toISOString();
 
     await d1
@@ -812,8 +813,8 @@ export const d1Db = {
     return (res.results || []).map((r) => this.mapMessage(r));
   },
 
-  async createMessage(d1: D1Database, msg: Omit<Message, 'id' | 'createdAt'> & { createdAt?: string }): Promise<Message> {
-    const id = generateUuid();
+  async createMessage(d1: D1Database, msg: Omit<Message, 'id' | 'createdAt'> & { id?: string; createdAt?: string }): Promise<Message> {
+    const id = (msg as any).id || generateUuid();
     const now = msg.createdAt || new Date().toISOString();
     const role: MessageRole = msg.role || (msg.sender === 'user' ? 'user' : 'assistant');
     const sender: 'user' | 'assistant' = role === 'user' ? 'user' : 'assistant';

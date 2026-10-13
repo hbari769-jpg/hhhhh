@@ -689,11 +689,11 @@ export function shouldPerformWebSearch(
   // DECISION BRANCH B & D: CURRENT, CHANGING, LOCATION, PRICING, & TIME-SENSITIVE INFO
   // ---------------------------------------------------------------------------
 
-  // Mandatory override if user specifies "latest" or "current" (or Bengali/Banglish equivalents)
+  // Contextual check for explicit latest/current factual inquiries (avoid matching isolated words like "now", "update", "নতুন", or "এখন" in casual text)
   const hasLatestOrCurrentPhrase =
-    /\b(?:latest|current|recent|today|now|news|update|breaking)\b/i.test(query) ||
-    /(?:আজকে|আজকের|সাম্প্রতিক|নতুন|এখন|আজকের খবর|আজকের দাম|আজকের স্কোর|কারেন্ট|নিউজ|আপডেট)/i.test(query) ||
-    /\b(?:ajke|ajker|somprotik|notun|ekhon|news|update)\b/i.test(query);
+    /\b(?:latest\s+(?:news|update|information|info|version|score|price|rate|data|event|release)|current\s+(?:news|rate|price|score|president|pm|leader|ceo|status|event|weather|stock)|breaking\s+news|today'?s\s+(?:news|weather|rate|score|price|headline|event|gold\s+price|dollar\s+rate))\b/i.test(query) ||
+    /(?:আজকের\s*(?:খবর|সংবাদ|দাম|দর|স্কোর|আবহাওয়া|ডলার\s*রেট|স্বর্ণের\s*দাম|সোনার\s*দাম|ব্রেকিং)|সাম্প্রতিক\s*(?:খবর|সংবাদ|পরিস্থিতি|ঘটনা|আপডেট|তথ্য)|সর্বশেষ\s*(?:খবর|সংবাদ|তথ্য|আপডেট|স্কোর|দাম))/i.test(query) ||
+    /\b(?:ajker\s*(?:khobor|news|dam|score|rate|weather)|breaking\s*news|shobsesh\s*khobor)\b/i.test(query);
 
   if (hasLatestOrCurrentPhrase) {
     return true;
@@ -703,8 +703,7 @@ export function shouldPerformWebSearch(
   // (latest information, current information, today's information, recent developments, recent updates, "what is happening now", information that may have changed)
   const isCurrentOrLatestInfo =
     /\b(?:latest\s+information|current\s+information|today'?s\s+information|recent\s+developments|recent\s+updates|what\s+is\s+happening\s+now|what['’]?s\s+happening\s+now|happening\s+now|right\s+now|update\s+on|latest\s+update|current\s+update|recent\s+update|kono\s+update|notun\s+update|update\s+news|update\s+ki|update\s+dao|update\s+bolo|update\s+jante|update\s+ache|er\s+update|somporke\s+update|bepare\s+update|information\s+(?:changed|updated))\b/i.test(query) ||
-    /\b(?:update|updates)\b/i.test(query) ||
-    /(?:আপডেট)/i.test(query) ||
+    /\b(?:latest\s+updates?|breaking\s+updates?|live\s+updates?|news\s+updates?)\b/i.test(query) ||
     /(?:বর্তমান\s*তথ্য|আজকের\s*তথ্য|সাম্প্রতিক\s*উন্নয়ন|সাম্প্রতিক\s*আপডেট|এখন\s*কী\s*হচ্ছে|এখন\s*কি\s*হচ্ছে|চলমান\s*পরিস্থিতি|কোনো\s*আপডেট|নতুন\s*আপডেট|সর্বশেষ\s*আপডেট|আপডেট\s*নিউজ|আপডেট\s*খবর|আপডেট\s*কী|আপডেট\s*কি|আপডেট\s*বলো|আপডেট\s*দাও|আপডেট\s*জানতে|আপডেট\s*আছে|সম্পর্কে\s*আপডেট|নিয়ে\s*আপডেট|এর\s*আপডেট)/i.test(query);
   if (isCurrentOrLatestInfo) {
     return true;
@@ -836,15 +835,7 @@ export function shouldPerformWebSearch(
     return true;
   }
 
-  // Dynamic Temporal Anchor Catch-all (questions asking for facts anchored in current year/recent times)
-  const hasDynamicTemporalAnchor =
-    /\b(?:latest|recent|recently|currently|today|yesterday|this\s+week|this\s+month|this\s+year|right\s+now|nowadays|presently|upcoming|newest)\b/i.test(query) ||
-    /\b(?:ajker|gotokal|eibochor|shamprotik|ekhon|ekhonkar|notun|shobsesh|bortoman)\b/i.test(query) ||
-    /(?:আজকের|গতকাল|এই\s*বছর|সাম্প্রতিক|এখনকার|এখন|নতুন|সর্বশেষ|বর্তমান|চলতি|আসন্ন)/i.test(query) ||
-    /\b(?:2025|2026)\b/.test(query);
-  if (hasDynamicTemporalAnchor) {
-    return true;
-  }
+  return false;
 
   return false;
 }

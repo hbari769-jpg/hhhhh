@@ -266,6 +266,7 @@ export interface ChatCompletionParams {
   systemInstruction?: string;
   aiEnginePreferences?: AiEnginePreferences;
   onSearchProgress?: (status: WebSearchProgressStatus) => void;
+  abortSignal?: AbortSignal;
 }
 
 const SUPPORTED_IMAGE_MIME_TYPES = new Set([
@@ -453,7 +454,7 @@ export async function createChatStream(params: ChatCompletionParams) {
     try {
       const recentContext = messages.slice(-3).map((m) => m.content).join(' ');
       const memoryPromise = db.retrieveRelevantMemories(user.id, recentContext, 6);
-      const timeoutPromise = new Promise<any[]>((resolve) => setTimeout(() => resolve([]), 250));
+      const timeoutPromise = new Promise<any[]>((resolve) => setTimeout(() => resolve([]), 80));
       const relevantMemories = await Promise.race([memoryPromise, timeoutPromise]);
       if (relevantMemories && relevantMemories.length > 0) {
         memoryContext = `\n\n[USER ACCOUNT-LEVEL PERSISTENT MEMORIES - Use these facts & preferences to personalize your responses naturally]:\n` +
@@ -818,6 +819,12 @@ ${languageDirective}
 
   // 4. Gemini Execution via Smart Route Candidates
   if (gemini) {
+    if (params.abortSignal?.aborted) {
+      const abortErr = new Error('Request was aborted by the client.');
+      abortErr.name = 'AbortError';
+      throw abortErr;
+    }
+
     const validatedRequestedModel = (model && model !== 'default' && model !== 'auto' && !model.includes('qwen'))
       ? normalizeAndValidateModel(model)
       : null;
@@ -895,6 +902,7 @@ ${languageDirective}
       }
     }
   }
+
 
   // 5. Resilient Groq Fallback if Gemini failed or is not available and Groq was not attempted
   if (groq && !attemptedModels.has(GROQ_MODELS.REASONING) && !hasImages && !hasMediaAttachments) {

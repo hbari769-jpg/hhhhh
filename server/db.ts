@@ -726,13 +726,14 @@ export class Database {
   async createConversation(
     userId: string,
     title = 'New Conversation',
-    model = DEFAULT_MODEL_ID
+    model = DEFAULT_MODEL_ID,
+    customId?: string
   ): Promise<Conversation> {
     if (this.mode === 'production-d1') {
       const d1 = this.ensureAvailable();
-      return d1Db.createConversation(d1, userId, title, model);
+      return d1Db.createConversation(d1, userId, title, model, customId);
     }
-    const id = crypto.randomUUID();
+    const id = customId || crypto.randomUUID();
     const now = new Date().toISOString();
     const newConv: Conversation = {
       id,
@@ -801,12 +802,12 @@ export class Database {
       .sort((a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime());
   }
 
-  async createMessage(msg: Omit<Message, 'id' | 'createdAt'> & { createdAt?: string }): Promise<Message> {
+  async createMessage(msg: Omit<Message, 'id' | 'createdAt'> & { id?: string; createdAt?: string }): Promise<Message> {
     if (this.mode === 'production-d1') {
       const d1 = this.ensureAvailable();
       return d1Db.createMessage(d1, msg);
     }
-    const id = crypto.randomUUID();
+    const id = (msg as any).id || crypto.randomUUID();
     const now = msg.createdAt || new Date().toISOString();
     const newMsg: Message = { ...msg, id, createdAt: now };
     this.localData.messages.push(newMsg);

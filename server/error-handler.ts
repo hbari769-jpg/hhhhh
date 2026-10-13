@@ -231,6 +231,19 @@ export interface ClassifiedError {
   stack?: string;
 }
 
+export function isClientAbortError(err: any): boolean {
+  if (!err) return false;
+  const rawMsg = typeof err === 'string' ? err : err?.message || String(err || '');
+  const errName = String(err?.name || '');
+  const causeMsg = err?.cause ? String(err.cause?.message || err.cause || '') : '';
+  const combined = `${rawMsg} ${causeMsg} ${errName}`;
+  return (
+    /aborted|abort|premature close|client closed|client disconnected|user aborted/i.test(
+      combined
+    ) && !/timed?\s*out|timeout/i.test(combined)
+  );
+}
+
 /**
  * Classifies any error into a standardized, safe representation.
  * Sanitizes internal details so clients never see stack traces, raw SQL,
@@ -243,9 +256,20 @@ export function classifyError(err: any): ClassifiedError {
   const errCode = String(err?.code || '');
   const errName = String(err?.name || '');
 
+  // 0. CLIENT ABORT ERRORS (HTTP 499 - Client Closed Connection / Stop generation)
+  if (isClientAbortError(err)) {
+    return {
+      category: 'timeout',
+      statusCode: 499,
+      code: 'CLIENT_CLOSED_REQUEST',
+      safeMessage: 'Request was cancelled by the client.',
+      originalMessage: rawMsg,
+      stack,
+    };
+  }
+
   // 1. TIMEOUT ERRORS (HTTP 504 / 408)
   if (
-    errName === 'AbortError' ||
     errCode === 'ETIMEDOUT' ||
     errCode === 'ESOCKETTIMEDOUT' ||
     /timeout|timed out|request timed out/i.test(rawMsg)

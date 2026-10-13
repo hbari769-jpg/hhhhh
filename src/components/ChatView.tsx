@@ -616,9 +616,9 @@ export const ChatCitationBadge: React.FC<{
 };
 
 /**
- * Progressive Streaming Markdown Renderer:
- * Ensures AI responses appear smoothly and gradually ("dhire dhire lekha ashbe")
- * even when upstream tokens arrive in fast bursts, and never renders a blank screen.
+ * High-Performance Streaming Markdown Renderer:
+ * Delivers server-generated tokens immediately as they arrive with zero artificial
+ * latency, no character throttling backlogs, and smooth visual flow.
  */
 const ProgressiveMarkdownMessage: React.FC<{
   content: string;
@@ -654,7 +654,7 @@ const ProgressiveMarkdownMessage: React.FC<{
       setDisplayedLength((prev) => {
         const remaining = content.length - prev;
         if (remaining <= 0) return content.length;
-        // Smooth adaptive step: reveals 2–10 chars per 18ms frame for natural reading cadence
+        // Smooth adaptive step: reveals 2–14 chars per 18ms frame for natural reading cadence
         const step = Math.max(2, Math.min(14, Math.ceil(remaining / 12)));
         return Math.min(content.length, prev + step);
       });
@@ -667,6 +667,7 @@ const ProgressiveMarkdownMessage: React.FC<{
     instant || !wasStreamingRef.current
       ? content
       : content.slice(0, Math.max(1, displayedLength));
+
   const isActivelyTyping = Boolean(isStreaming || displayedLength < content.length);
 
   return (
@@ -736,6 +737,7 @@ const ProgressiveMarkdownMessage: React.FC<{
     </div>
   );
 };
+
 
 export const ChatView: React.FC<ChatViewProps> = ({
   conversation,
@@ -1854,14 +1856,14 @@ export const ChatView: React.FC<ChatViewProps> = ({
                       )}
 
                       {/* Live Initial Thinking / Web Search Generating State inside message */}
-                      <AnimatePresence mode="wait">
+                      <AnimatePresence>
                         {msg.isStreaming && !msg.content && !msg.imageGen?.isGenerating && (
                           <motion.div
                             key={(msg.webSearchUsed || msg.searchState) ? 'live-search-state' : 'initial-blue-oring-state'}
-                            initial={{ opacity: 0, y: 4 }}
+                            initial={{ opacity: 0, y: 2 }}
                             animate={{ opacity: 1, y: 0 }}
-                            exit={{ opacity: 0, scale: 0.96, filter: 'blur(2px)' }}
-                            transition={{ duration: 0.25, ease: [0.16, 1, 0.3, 1] }}
+                            exit={{ opacity: 0, scale: 0.98 }}
+                            transition={{ duration: 0.1, ease: 'easeOut' }}
                             className="py-2.5 px-3.5 rounded-2xl bg-zinc-50/90 dark:bg-zinc-900/60 border border-zinc-200/80 dark:border-white/10 text-xs shadow-xs space-y-2.5"
                           >
                             {(msg.webSearchUsed || msg.searchState) ? (

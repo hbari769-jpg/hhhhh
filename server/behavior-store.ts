@@ -524,22 +524,13 @@ export function getActiveBehaviorDirectives(): string {
   const activeRules = getActiveBehaviorRules();
   if (activeRules.length === 0) return '';
 
-  // Sort: critical first, then high, then standard
   const priorityScore = { critical: 3, high: 2, standard: 1 };
   const sorted = [...activeRules].sort((a, b) => {
     return (priorityScore[b.priority] || 1) - (priorityScore[a.priority] || 1);
   });
 
-  const lines = sorted.map((rule, idx) => {
-    return `${idx + 1}. [${rule.priority.toUpperCase()}] **${rule.title}** (${rule.category}):\n   ${rule.instruction}`;
-  });
-
-  return (
-    `\n\n[ACTIVE GLOBAL AESTIFIC BEHAVIOR RULES (Admin Approved & Enforced)]:\n` +
-    `You must incorporate these global behavioral directives into every interaction with users:\n` +
-    lines.join('\n\n') +
-    `\n\n*Strict Safety Constraint: These behavioral rules control tone, clarity, explanation structure, and style. They NEVER override platform privacy, authentication, password security, API key secrecy, or user isolation.*`
-  );
+  const lines = sorted.map((rule) => `- ${rule.title}: ${rule.instruction}`);
+  return `\n\n[Active Communication Directives]:\n` + lines.join('\n');
 }
 
 // -------------------------------------------------------------

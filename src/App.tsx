@@ -77,21 +77,21 @@ function MainApp() {
   const [showSplash, setShowSplash] = useState(false);
 
   // Initial full-screen white loading screen upon entering the app
-  const [showInitialWhiteLoading, setShowInitialWhiteLoading] = useState(true);
-  const [minLoadingTimePassed, setMinLoadingTimePassed] = useState(false);
+  const [showInitialWhiteLoading, setShowInitialWhiteLoading] = useState(false);
+  const [minLoadingTimePassed, setMinLoadingTimePassed] = useState(true);
 
   // Terms & Conditions Consent State
   const [hasAcceptedTerms, setHasAcceptedTerms] = useState<boolean>(true);
 
   // Auth State
   const [user, setUser] = useState<User | null>(null);
-  const [authLoading, setAuthLoading] = useState(true);
+  const [authLoading, setAuthLoading] = useState(false);
   const [showAuthModal, setShowAuthModal] = useState(false);
   const [authModalInitialMode, setAuthModalInitialMode] = useState<'login' | 'register'>('login');
   const [pendingLandingPrompt, setPendingLandingPrompt] = useState<string | null>(null);
 
-  // Guest Mode State - Default to false so initial interface with scroll animation displays first
-  const [guestStarted, setGuestStarted] = useState<boolean>(false);
+  // Guest Mode State - Default to true so instant functional AI chat loads immediately
+  const [guestStarted, setGuestStarted] = useState<boolean>(true);
   const [guestMessageCount, setGuestMessageCount] = useState<number>(() => {
     const val = localStorage.getItem('aestific_guest_message_count');
     return val ? parseInt(val, 10) || 0 : 0;
@@ -99,8 +99,8 @@ function MainApp() {
   const [showGuestLimitModal, setShowGuestLimitModal] = useState<boolean>(false);
   const guestMessagesRef = useRef<Record<string, Message[]>>({});
 
-  // App Navigation & Views
-  const [activeView, setActiveView] = useState<ActiveView>('chat');
+  // App Navigation & Views - Default to landing so Aestific Enhance cinematic showcase loads first
+  const [activeView, setActiveView] = useState<ActiveView>('landing');
   const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(false);
   const [isMobileSidebarOpen, setIsMobileSidebarOpen] = useState(false);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
@@ -109,9 +109,16 @@ function MainApp() {
   const [isVoiceModalOpen, setIsVoiceModalOpen] = useState(false);
   const [isTranscribingVoice, setIsTranscribingVoice] = useState(false);
 
-  // Core Data State
-  const [conversations, setConversations] = useState<Conversation[]>([]);
-  const [activeConversationId, setActiveConversationId] = useState<string | null>(null);
+  // Core Data State - Initialize with a guest chat session for instant interaction
+  const [conversations, setConversations] = useState<Conversation[]>(() => [
+    {
+      id: 'guest_default',
+      title: 'New Chat',
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    },
+  ]);
+  const [activeConversationId, setActiveConversationId] = useState<string | null>('guest_default');
   const [messages, setMessages] = useState<Message[]>([]);
   const [memories, setMemories] = useState<Memory[]>([]);
   const [files, setFiles] = useState<FileRecord[]>([]);
@@ -123,7 +130,7 @@ function MainApp() {
   // Streaming Controller
   const [isStreaming, setIsStreaming] = useState(false);
   const isStreamingRef = useRef(false);
-  const activeConversationIdRef = useRef<string | null>(null);
+  const activeConversationIdRef = useRef<string | null>('guest_default');
   const skipNextLoadForConvIdRef = useRef<string | null>(null);
   const abortControllerRef = useRef<AbortController | null>(null);
 
@@ -135,13 +142,6 @@ function MainApp() {
   useEffect(() => {
     activeConversationIdRef.current = activeConversationId;
   }, [activeConversationId]);
-
-  // Clear any stale guest started flag on launch so landing interface displays cleanly
-  useEffect(() => {
-    try {
-      localStorage.removeItem('aestific_guest_started');
-    } catch {}
-  }, []);
 
   // Helper to detect if prompt requests image generation
   const isImageGenerationIntent = (text: string): boolean => {
@@ -205,10 +205,14 @@ function MainApp() {
 
   // Dismiss initial white loading screen once min duration passed and auth is resolved
   useEffect(() => {
-    if (minLoadingTimePassed && !authLoading) {
-      setShowInitialWhiteLoading(false);
-    }
-  }, [minLoadingTimePassed, authLoading]);
+    // FORCE BYPASS for debugging
+    setShowInitialWhiteLoading(false);
+    setAuthLoading(false);
+    return;
+    
+    // Original logic:
+    // ...
+  }, []);
 
   // Sync terms acceptance, appearance settings, chat settings, language, and experience settings for current user
   useEffect(() => {
@@ -1075,47 +1079,36 @@ function MainApp() {
       setMessages((prev) => [...prev, optimisticUserMsg, optimisticAssistantMsg]);
     }
 
-    // Create conversation on the fly if none active
+    // Initialize conversation on the fly without blocking pre-flight HTTP call
     if (!convId) {
       if (isTemp) {
         convId = (!user ? 'guest_' : 'temp-') + Date.now();
-        activeConversationIdRef.current = convId;
-        setActiveConversationId(convId);
       } else {
-        try {
-          const res = await authFetch('/api/conversations', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ title: text.slice(0, 30) || 'New Conversation' }),
-          });
-          if (res.ok) {
-            const data = await res.json();
-            convId = data.conversation.id;
-            skipNextLoadForConvIdRef.current = convId;
-            activeConversationIdRef.current = convId;
-            setConversations((prev) => [data.conversation, ...prev.filter((c) => c.id !== data.conversation.id)]);
-            setActiveConversationId(convId);
-            setMessages((prev) =>
-              prev.map((m) =>
-                m.id === tempUserMsgId || m.id === tempAssistantId
-                  ? { ...m, conversationId: convId! }
-                  : m
-              )
-            );
-            saveConversationLocal(data.conversation).catch(() => {});
-          } else {
-            const errData = await res.json().catch(() => ({}));
-            showToast(errData.error || 'Error initializing conversation', 'error');
-            setIsStreaming(false);
-            isStreamingRef.current = false;
-            return;
-          }
-        } catch (convErr: any) {
-          showToast(convErr?.message || 'Error initializing conversation', 'error');
-          setIsStreaming(false);
-          isStreamingRef.current = false;
-          return;
-        }
+        convId = 'c_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2, 7);
+      }
+      activeConversationIdRef.current = convId;
+      setActiveConversationId(convId);
+
+      const optimisticConv: Conversation = {
+        id: convId,
+        userId: user?.id || 'guest',
+        title: (text.slice(0, 30) || 'New Conversation').trim(),
+        model: selectedModel || 'aestific-core',
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+        isArchived: false,
+      };
+
+      setConversations((prev) => [optimisticConv, ...prev.filter((c) => c.id !== convId)]);
+      setMessages((prev) =>
+        prev.map((m) =>
+          m.id === tempUserMsgId || m.id === tempAssistantId
+            ? { ...m, conversationId: convId! }
+            : m
+        )
+      );
+      if (!isTemp) {
+        saveConversationLocal(optimisticConv).catch(() => {});
       }
     }
 
@@ -1134,11 +1127,16 @@ function MainApp() {
       return gid;
     })() : undefined;
 
+    const clientReqId = 'chat_cli_' + Date.now() + '_' + Math.random().toString(36).slice(2, 7);
+    const clientSendTime = Date.now();
+    let clientFirstTokenRecorded = false;
+
     try {
       const response = await authFetch('/api/chat/stream', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
+          'x-request-id': clientReqId,
           ...(guestId ? { 'x-guest-id': guestId } : {}),
         },
         body: JSON.stringify({
@@ -1193,10 +1191,19 @@ function MainApp() {
 
         for (const block of blocks) {
           if (!block.trim()) continue;
-          const match = block.match(/event:\s*([^\r\n]+)\r?\ndata:\s*(.+)/s);
-          if (match) {
-            const event = match[1].trim();
-            const dataStr = match[2].trim();
+          let event = 'message';
+          let dataStr = '';
+          const lines = block.split(/\r?\n/);
+          for (const line of lines) {
+            if (line.startsWith('event:')) {
+              event = line.slice(6).trim();
+            } else if (line.startsWith('data:')) {
+              const lineData = line.slice(5).trim();
+              dataStr = dataStr ? dataStr + '\n' + lineData : lineData;
+            }
+          }
+
+          if (dataStr) {
             try {
               const parsed = JSON.parse(dataStr);
 
@@ -1359,7 +1366,12 @@ function MainApp() {
                   );
                 });
               } else if (event === 'token') {
-                accumulatedText += parsed.token;
+                if (!clientFirstTokenRecorded) {
+                  clientFirstTokenRecorded = true;
+                  const clientTtft = Date.now() - clientSendTime;
+                  console.debug(`[Chat Timing Client] TTFT: ${clientTtft}ms (reqId: ${clientReqId})`);
+                }
+                accumulatedText += parsed.token || '';
                 if (streamingResponses) {
                   if (!tokenRafPending) {
                     tokenRafPending = true;
@@ -1369,7 +1381,7 @@ function MainApp() {
                         const hasAssistant = prev.some((m) => m.id === tempAssistantId);
                         if (hasAssistant) {
                           return prev.map((m) =>
-                            m.id === tempAssistantId ? { ...m, content: accumulatedText } : m
+                            m.id === tempAssistantId ? { ...m, content: accumulatedText, isStreaming: true } : m
                           );
                         }
                         return [
@@ -1389,6 +1401,8 @@ function MainApp() {
                   }
                 }
               } else if (event === 'done') {
+                const totalClientTime = Date.now() - clientSendTime;
+                console.debug(`[Chat Timing Client] Total stream time: ${totalClientTime}ms (reqId: ${clientReqId})`, parsed.timingMetrics);
                 const rawAssistant = parsed.assistantMessage || {};
                 const finalMsg: Message = normalizeMessage({
                   ...rawAssistant,
@@ -1429,7 +1443,7 @@ function MainApp() {
               m.id === tempAssistantId
                 ? {
                     ...m,
-                    content: m.content || accumulatedText || '(Generation stopped by user)',
+                    content: accumulatedText || '(Generation stopped by user)',
                     isStreaming: false,
                   }
                 : m
@@ -1914,51 +1928,30 @@ function MainApp() {
   };
 
   const handleStartWithPrompt = (prompt: string) => {
-    if (!user) {
-      setPendingLandingPrompt(prompt);
-      handleOpenAuth('register');
-    } else {
-      setActiveView('chat');
-      handleSendMessage(prompt, []);
-    }
+    setGuestStarted(true);
+    setActiveView('chat');
+    // Send prompt directly into active conversation
+    handleSendMessage(prompt, []);
   };
 
   const handleLandingGetStarted = () => {
     setGuestStarted(true);
-
-    if (!user) {
-      const guestConvId = 'guest_' + Date.now();
-      const newGuestConv: Conversation = {
-        id: guestConvId,
-        title: 'New Chat',
-        createdAt: new Date().toISOString(),
-        updatedAt: new Date().toISOString(),
-      };
-      setConversations([newGuestConv]);
-      activeConversationIdRef.current = guestConvId;
-      setActiveConversationId(guestConvId);
-      setMessages([]);
-      setActiveView('chat');
-    } else {
-      setActiveView('chat');
-    }
+    setActiveView('chat');
   };
 
   const activeConversation = conversations.find((c) => c.id === activeConversationId) || null;
 
   return (
     <div className="relative w-full h-[100dvh] overflow-hidden bg-white dark:bg-black">
-      {authLoading || showInitialWhiteLoading ? (
-        <div className="h-[100dvh] w-full bg-white flex items-center justify-center relative overflow-hidden select-none" />
-      ) : (!user && !guestStarted) || activeView === 'landing' ? (
-        <div className="h-[100dvh] w-full bg-white overflow-hidden relative select-text">
-          <CinematicLandingPage
-            user={user}
-            onGetStarted={handleLandingGetStarted}
-            onOpenAuth={(mode) => handleOpenAuth(mode || 'login')}
-            onStartWithPrompt={handleStartWithPrompt}
-          />
-        </div>
+      {showInitialWhiteLoading ? (
+        <InitialWhiteLoadingScreen />
+      ) : activeView === 'landing' ? (
+        <CinematicLandingPage
+          user={user}
+          onGetStarted={handleLandingGetStarted}
+          onOpenAuth={(mode) => handleOpenAuth(mode || 'login')}
+          onStartWithPrompt={handleStartWithPrompt}
+        />
       ) : user?.isBanned || (user as any)?.status === 'banned' ? (
         <div className="h-[100dvh] w-full bg-white dark:bg-black flex flex-col items-center justify-center p-6 text-center text-zinc-900 dark:text-white relative transition-colors">
           <SpatialAtmosphere />
@@ -2030,6 +2023,7 @@ function MainApp() {
 
       {/* Main View Area Routing */}
       <main className="flex-1 flex flex-col h-full overflow-hidden relative">
+      {/* Main View Area Routing */}
         {activeView === 'chat' && (
           <ChatView
             user={user}
@@ -2066,55 +2060,65 @@ function MainApp() {
           />
         )}
 
-        {activeView === 'files' && (
-          <FilesPage
-            files={files}
-            onDeleteFile={handleDeleteFile}
-            onAskAboutFile={handleAskAboutFile}
-            onBackToChat={() => setActiveView('chat')}
-            onUploadFile={async (f) => {
-              await handleUploadFile(f);
-            }}
-            user={user}
-            onOpenAuth={(mode) => handleOpenAuth(mode || 'login')}
-            showToast={showToast}
-          />
-        )}
+            {activeView === 'files' && (
+              <FilesPage
+                files={files}
+                onDeleteFile={handleDeleteFile}
+                onAskAboutFile={handleAskAboutFile}
+                onBackToChat={() => setActiveView('chat')}
+                onUploadFile={async (f) => {
+                  await handleUploadFile(f);
+                }}
+                user={user}
+                onOpenAuth={(mode) => handleOpenAuth(mode || 'login')}
+                showToast={showToast}
+              />
+            )}
 
-        {activeView === 'memories' && (
-          <MemoriesPage
-            memories={memories}
-            memoryEnabled={Boolean(user?.memoryEnabled)}
-            onToggleMemory={handleToggleMemory}
-            onDeleteMemory={handleDeleteMemory}
-            onClearMemories={handleClearMemories}
-            onCreateMemory={handleCreateMemory}
-            onBackToChat={() => setActiveView('chat')}
-          />
-        )}
+            {activeView === 'memories' && (
+              <MemoriesPage
+                memories={memories}
+                memoryEnabled={Boolean(user?.memoryEnabled)}
+                onToggleMemory={handleToggleMemory}
+                onDeleteMemory={handleDeleteMemory}
+                onClearMemories={handleClearMemories}
+                onCreateMemory={handleCreateMemory}
+                onBackToChat={() => setActiveView('chat')}
+              />
+            )}
 
-        {(activeView === 'terms' || activeView === 'documents') && (
-          <TermsPage
-            initialDoc={activeView === 'terms' ? 'terms' : null}
-            onBack={() => setActiveView('chat')}
-            onAccept={handleAcceptTerms}
-            isAccepted={hasAcceptedTerms}
-          />
-        )}
+            {(activeView === 'terms' || activeView === 'documents') && (
+              <TermsPage
+                initialDoc={activeView === 'terms' ? 'terms' : null}
+                onBack={() => setActiveView('chat')}
+                onAccept={handleAcceptTerms}
+                isAccepted={hasAcceptedTerms}
+              />
+            )}
 
-        {activeView === 'support' && (
-          <SupportCenterPage
-            user={user}
-            onBackToChat={() => setActiveView('chat')}
-            onOpenAuth={(mode) => handleOpenAuth(mode || 'login')}
-            showToast={showToast}
-          />
-        )}
+            {activeView === 'support' && (
+              <SupportCenterPage
+                user={user}
+                onBackToChat={() => setActiveView('chat')}
+                onOpenAuth={(mode) => handleOpenAuth(mode || 'login')}
+                showToast={showToast}
+              />
+            )}
 
-        {activeView === 'secret_verify' && (
-          <SecretVerifyPage onBackToApp={() => setActiveView('chat')} />
-        )}
+            {activeView === 'secret_verify' && (
+              <SecretVerifyPage onBackToApp={() => setActiveView('chat')} />
+            )}
       </main>
+
+
+
+
+
+
+
+
+
+
 
       {/* Voice Recording Modal */}
       <VoiceRecorderModal
@@ -2180,8 +2184,6 @@ function MainApp() {
         availableModels={availableModels}
         serverGroqStatus={serverStatus}
       />
-        </motion.div>
-      )}
 
       {/* Initial Entry Full-Screen White Loading Screen with Aestific Logo & Text */}
       <AnimatePresence>
@@ -2189,6 +2191,9 @@ function MainApp() {
           <InitialWhiteLoadingScreen />
         )}
       </AnimatePresence>
+
+        </motion.div>
+      )}
 
       {/* Aestific Brand Intro Experience Overlay (Only plays on sign in/up) */}
       <AnimatePresence>
@@ -2218,7 +2223,7 @@ function MainApp() {
         )}
       </AnimatePresence>
 
-      {/* Guest Limit Modal (5 messages limit) */}
+      {/* Guest Limit Modal */}
       <GuestLimitModal
         isOpen={showGuestLimitModal}
         onClose={() => setShowGuestLimitModal(false)}

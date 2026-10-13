@@ -96,6 +96,7 @@ import {
   safeLogger,
   productionErrorHandler,
   classifyError,
+  isClientAbortError,
 } from './server/error-handler.js';
 import { validateProductionEnvironment } from './server/production-config.js';
 
@@ -1566,12 +1567,14 @@ app.post('/api/chat/stream', requireAuthOrGuest, async (req: AuthRequest, res: R
   const isGuest = (req as any).isGuest === true || user.id.startsWith('guest_');
 
   const reqStartTime = Date.now();
-  const reqId = `chat_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
+  const reqId = (req.headers['x-request-id'] as string) || `chat_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
   const timings: Record<string, number> = {};
   const recordStage = (stage: string) => {
     timings[stage] = Date.now() - reqStartTime;
   };
   recordStage('request_received');
+
+
 
   // Enforce 5-message limit and feature restrictions for guest users on server
   if (isGuest) {
@@ -1651,6 +1654,13 @@ app.post('/api/chat/stream', requireAuthOrGuest, async (req: AuthRequest, res: R
 
   recordStage('auth_and_rate_limit_completed');
 
+  // Immediately establish SSE connection so time-to-first-byte is zero
+  res.setHeader('Content-Type', 'text/event-stream; charset=utf-8');
+  res.setHeader('Cache-Control', 'no-cache, no-transform');
+  res.setHeader('Connection', 'keep-alive');
+  res.setHeader('X-Accel-Buffering', 'no');
+  res.flushHeaders?.();
+
   // Parallelize initial conversation verification and message history loading
   let conv: Conversation | null = null;
   let existingMessages: Message[] = [];
@@ -1694,7 +1704,8 @@ app.post('/api/chat/stream', requireAuthOrGuest, async (req: AuthRequest, res: R
         conv = await db.createConversation(
           user.id,
           (message || 'New Conversation').slice(0, 40),
-          model || user.preferredModel || DEFAULT_MODEL_ID
+          model || user.preferredModel || DEFAULT_MODEL_ID,
+          conversationId
         );
       } catch {
         conv = {
@@ -1947,9 +1958,11 @@ app.post('/api/chat/stream', requireAuthOrGuest, async (req: AuthRequest, res: R
           }
         }
       } else if (!isTemporary) {
-        // Query scoped files specifically for this conversationId only (no full user table scan)
-        const convFiles = await db.getFilesByConversation(conversationId, user.id);
-        if (convFiles && convFiles.length > 0) {
+        // Fast path: Only query scoped files if conversation has historical attachments or user message references a file/document
+        const mentionsFile = /\b(?:file|document|attachment|pdf|photo|image|doc|csv|table|upload|summary\s+of)\b/i.test(message || '');
+        if (hasHistoryFiles) {
+          const convFiles = await db.getFilesByConversation(conversationId, user.id);
+          if (convFiles && convFiles.length > 0) {
           for (const histFile of convFiles.slice(0, 3)) {
             if (histFile && histFile.extractedText) {
               const textLen = histFile.extractedText.length;
@@ -1974,19 +1987,13 @@ app.post('/api/chat/stream', requireAuthOrGuest, async (req: AuthRequest, res: R
           }
         }
       }
-    } catch (histFileErr) {
+    }
+  } catch (histFileErr) {
       console.warn('Follow-up file context hydration note:', histFileErr);
     }
   }
 
   recordStage('files_and_context_retrieved');
-
-  // Immediately set SSE Headers so the client connection is live and unbuffered
-  res.setHeader('Content-Type', 'text/event-stream; charset=utf-8');
-  res.setHeader('Cache-Control', 'no-cache, no-transform');
-  res.setHeader('Connection', 'keep-alive');
-  res.setHeader('X-Accel-Buffering', 'no');
-  res.flushHeaders?.();
 
   // Save User Message & Send user_message event
   const rawFileIds = attachments?.map((a: any) => a.id).filter(Boolean) || [];
@@ -1995,69 +2002,54 @@ app.post('/api/chat/stream', requireAuthOrGuest, async (req: AuthRequest, res: R
   );
   const fileIds = fileOwnershipChecks.filter((c) => Boolean(c.file)).map((c) => c.fid);
 
-  let userMsg: Message;
-  if (isTemporary || isRegenerate) {
-    userMsg = {
-      id: reuseUserMessageId || ('temp_user_' + Date.now()),
-      conversationId,
-      userId: user.id,
-      role: 'user',
-      content: message || '(Uploaded attachment)',
-      model: model || conv.model || user.preferredModel || DEFAULT_MODEL_ID,
-      fileIds: fileIds && fileIds.length > 0 ? fileIds : undefined,
-      ...(attachments && attachments.length > 0
-        ? {
-            attachments: attachments.map((a: any) => ({
-              id: a.id,
-              name: a.name,
-              filename: a.filename,
-              type: a.type,
-              mimeType: a.mimeType,
-              size: a.size,
-              url: a.url,
-              previewUrl: a.previewUrl,
-              pageCount: a.pageCount,
-              duration: a.duration,
-              createdAt: a.createdAt,
-            })),
-          }
-        : {}),
-      createdAt: new Date().toISOString(),
-    };
-  } else {
-    const createdMsg = await db.createMessage({
-      conversationId,
-      userId: user.id,
-      role: 'user',
-      content: message || '(Uploaded attachment)',
-      model: model || conv.model || user.preferredModel || DEFAULT_MODEL_ID,
-      fileIds: fileIds && fileIds.length > 0 ? fileIds : undefined,
-    });
-    userMsg = {
-      ...createdMsg,
-      ...(attachments && attachments.length > 0
-        ? {
-            attachments: attachments.map((a: any) => ({
-              id: a.id,
-              name: a.name,
-              filename: a.filename,
-              type: a.type,
-              mimeType: a.mimeType,
-              size: a.size,
-              url: a.url,
-              previewUrl: a.previewUrl,
-              pageCount: a.pageCount,
-              duration: a.duration,
-              createdAt: a.createdAt,
-            })),
-          }
-        : {}),
-    };
-  }
+  const effectiveUserMsgId = (isTemporary || isRegenerate)
+    ? (reuseUserMessageId || ('temp_user_' + Date.now()))
+    : ('msg_' + Date.now() + '_' + Math.random().toString(36).slice(2, 8));
 
-  // Send initial event with user message ID immediately
+  const userMsg: Message = {
+    id: effectiveUserMsgId,
+    conversationId,
+    userId: user.id,
+    role: 'user',
+    content: message || '(Uploaded attachment)',
+    model: model || conv.model || user.preferredModel || DEFAULT_MODEL_ID,
+    fileIds: fileIds && fileIds.length > 0 ? fileIds : undefined,
+    ...(attachments && attachments.length > 0
+      ? {
+          attachments: attachments.map((a: any) => ({
+            id: a.id,
+            name: a.name,
+            filename: a.filename,
+            type: a.type,
+            mimeType: a.mimeType,
+            size: a.size,
+            url: a.url,
+            previewUrl: a.previewUrl,
+            pageCount: a.pageCount,
+            duration: a.duration,
+            createdAt: a.createdAt,
+          })),
+        }
+      : {}),
+    createdAt: new Date().toISOString(),
+  };
+
+  // Send initial user_message event immediately without waiting for database round-trip
   res.write(`event: user_message\ndata: ${JSON.stringify({ userMessage: userMsg })}\n\n`);
   (res as any).flush?.();
+
+  // Persist user message asynchronously to avoid adding latency to time-to-first-token
+  if (!isTemporary && !isRegenerate) {
+    db.createMessage({
+      id: effectiveUserMsgId,
+      conversationId,
+      userId: user.id,
+      role: 'user',
+      content: message || '(Uploaded attachment)',
+      model: model || conv.model || user.preferredModel || DEFAULT_MODEL_ID,
+      fileIds: fileIds && fileIds.length > 0 ? fileIds : undefined,
+    }).catch((dbErr) => safeLogger.warn('Async user message persistence note:', dbErr));
+  }
 
   if (!isTemporary && existingMessages.length <= 2 && (conv.title === 'New Conversation' || !conv.title)) {
     setTimeout(() => {
@@ -2235,6 +2227,7 @@ app.post('/api/chat/stream', requireAuthOrGuest, async (req: AuthRequest, res: R
 
     res.write(
       `event: start\ndata: ${JSON.stringify({
+        reqId,
         provider,
         modelUsed,
         webSearchUsed,
@@ -2256,9 +2249,10 @@ app.post('/api/chat/stream', requireAuthOrGuest, async (req: AuthRequest, res: R
         firstTokenRecorded = true;
         recordStage('first_model_token_received');
         recordStage('first_token_sent_to_client');
+        console.debug(`[Chat Timing Server] TTFT: ${Date.now() - reqStartTime}ms (reqId: ${reqId})`);
       }
 
-      if (suppressTokenStreaming) {
+      if (suppressTokenStreaming || res.writableEnded || res.destroyed) {
         return;
       }
 
@@ -2269,6 +2263,7 @@ app.post('/api/chat/stream', requireAuthOrGuest, async (req: AuthRequest, res: R
 
     if (provider === 'groq') {
       for await (const chunk of stream as any) {
+        if (res.writableEnded || res.destroyed) break;
         const delta = chunk.choices?.[0]?.delta?.content || '';
         if (delta) {
           handleStreamToken(delta);
@@ -2276,6 +2271,7 @@ app.post('/api/chat/stream', requireAuthOrGuest, async (req: AuthRequest, res: R
       }
     } else if (provider === 'gemini') {
       for await (const chunk of stream as any) {
+        if (res.writableEnded || res.destroyed) break;
         const text = chunk.text || '';
         if (text) {
           handleStreamToken(text);
@@ -2305,6 +2301,7 @@ app.post('/api/chat/stream', requireAuthOrGuest, async (req: AuthRequest, res: R
     } else {
       // Groq / OpenAI-compatible / Simulation stream
       for await (const chunk of stream as any) {
+        if (res.writableEnded || res.destroyed) break;
         if (chunk && typeof chunk === 'string') {
           handleStreamToken(chunk);
         } else {
@@ -2315,6 +2312,7 @@ app.post('/api/chat/stream', requireAuthOrGuest, async (req: AuthRequest, res: R
         }
       }
     }
+
 
     recordStage('stream_completed');
 
@@ -2463,12 +2461,43 @@ app.post('/api/chat/stream', requireAuthOrGuest, async (req: AuthRequest, res: R
 
     recordStage('database_persistence_completed');
 
-    // Structured server-side timing log for production diagnostics
-    safeLogger.info(`[Chat Timing] reqId: ${reqId} model: ${modelUsed} duration: ${timings.database_persistence_completed || timings.stream_completed || 0}ms`, timings);
+    const ttftMs = timings.first_model_token_received ?? 0;
+    const streamDurationMs = timings.stream_completed ? Math.max(0, timings.stream_completed - ttftMs) : 0;
+    const totalDurationMs = Date.now() - reqStartTime;
+    const persistenceMs = timings.database_persistence_completed ? Math.max(0, timings.database_persistence_completed - (timings.stream_completed || ttftMs)) : 0;
 
-    res.write(`event: done\ndata: ${JSON.stringify({ assistantMessage: assistantMsg })}\n\n`);
-    res.end();
+    // Structured server-side timing log for production diagnostics with distinct TTFT vs generation
+    safeLogger.info(`[Chat Timing] reqId: ${reqId} provider: ${provider} model: ${modelUsed} ttft: ${ttftMs}ms gen: ${streamDurationMs}ms db: ${persistenceMs}ms total: ${totalDurationMs}ms`, {
+      reqId,
+      provider,
+      model: modelUsed,
+      ttftMs,
+      streamDurationMs,
+      persistenceMs,
+      totalDurationMs,
+      webSearchUsed: effectiveWebSearchUsed,
+      ...timings,
+    });
+
+    if (!res.writableEnded && !res.destroyed) {
+      res.write(`event: done\ndata: ${JSON.stringify({ reqId, assistantMessage: assistantMsg, timingMetrics: { ttftMs, totalDurationMs } })}\n\n`);
+      res.end();
+    }
   } catch (err: any) {
+    if (res.writableEnded || res.destroyed) {
+      safeLogger.info(`[Chat Stream] Stream ${reqId} closed/cancelled by client.`);
+      if (!isTemporary && fullAssistantResponse && fullAssistantResponse.trim().length > 0) {
+        db.createMessage({
+          conversationId,
+          userId: user.id,
+          role: 'assistant',
+          content: fullAssistantResponse.trim(),
+          model: typeof model === 'string' ? model : 'default',
+        }).catch((e) => safeLogger.warn('Notice saving partial response:', e));
+      }
+      return;
+    }
+
     safeLogger.error('Chat stream failure:', err);
 
     const classified = classifyError(err);
@@ -2494,8 +2523,12 @@ app.post('/api/chat/stream', requireAuthOrGuest, async (req: AuthRequest, res: R
       return sendSafeError(res, err, classified.statusCode, userFacingError);
     }
 
-    res.write(`event: error\ndata: ${JSON.stringify({ error: userFacingError, code: classified.code })}\n\n`);
-    res.end();
+    if (!res.writableEnded && !res.destroyed) {
+      try {
+        res.write(`event: error\ndata: ${JSON.stringify({ error: userFacingError, code: classified.code })}\n\n`);
+        res.end();
+      } catch {}
+    }
   } finally {
     safeReleaseLock();
   }

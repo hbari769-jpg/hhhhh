@@ -53,6 +53,7 @@ async function runTests() {
       email: `edutester${Date.now()}@gmail.com`,
       passwordHash: 'hash',
       isEmailVerified: true,
+      memoryEnabled: true,
     });
 
     const genRes = await imageProviderManager.generateImage({
